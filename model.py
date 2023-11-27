@@ -1,12 +1,22 @@
 import torch
 import torch.nn as nn
 
-import copy
+import logging
 
-# Image patching + linear proj
-# 256 x 256 x 3 image
-# num_patches = (256 / 16) ** 2 = 256
-# 256 x 256 x 3 -> 256 x 256 x 768
+class LoggerControl:
+    def __init__(self, name=__name__):
+        self.logger = logging.getLogger(name)
+
+    def enable_logging(self, level=logging.INFO):
+        logging.basicConfig(level=level)
+        self.logger.setLevel(level)
+
+    def disable_logging(self):
+        logging.disable(logging.CRITICAL)
+      
+    def info(self, message):
+        self.logger.info(message)
+
 
 class PatchEmbedding(nn.Module):
     def __init__(self, image_size=256, patch_size=16, in_channels=3, embed_dim=768):
@@ -65,8 +75,7 @@ class UNETREncoder(nn.Module):
         layer_outputs = self.transformer(x)
         return [layer_outputs[i - 1] for i in self.extract_layers]
 
-# Decoder 
-
+# Decoder blocks
 class GreenBlock(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=2, stride=2, padding=0):
         super().__init__()
@@ -107,9 +116,8 @@ class GreyBlock(nn.Module):
     def forward(self, x):
         x = self.block(x)
         return x
-    
 
-class UNETR(nn.Module):
+class UNETR2D(nn.Module):
     def __init__(self, 
                  image_size=256, 
                  patch_size=16, 
@@ -122,9 +130,11 @@ class UNETR(nn.Module):
                  num_classes=2):
         super().__init__()
         self.encoder = UNETREncoder(image_size, patch_size, in_channels, embed_dim, num_heads, num_layers, dropout_rate, extract_layers)
+
         self.image_size = image_size
         self.patch_size = patch_size
         self.n_patches = (image_size // patch_size) ** 2
+
         #top yellow block 
         self.z0 = nn.Sequential(
             YellowBlock(in_channels, 64),
@@ -180,50 +190,66 @@ class UNETR(nn.Module):
         z3, z6, z9, z12 = \
             [z.reshape(-1, 768, self.image_size // self.patch_size, self.image_size // self.patch_size) for z in encoder_out]
         
-        print("Encoder output z3", z3.shape)
-        print("Encoder output z6", z6.shape)
-        print("Encoder output z9", z9.shape)
-        print("Encoder output z12", z12.shape)
+        logger.info(f"z0 shape: {x.shape}")
+        logger.info(f"z3 shape: {z3.shape}")
+        logger.info(f"z6 shape: {z6.shape}")
+        logger.info(f"z9 shape: {z9.shape}")
+        logger.info(f"z12 shape: {z12.shape}")
 
         # 0 layer encoder out
         out0 = self.z0(x) # out 64c x H x W
-        print("0 layer blue conv output", out0.shape)
+        logger.info(f"out0 shape: {out0.shape}")
 
         # 3 layer encoder out
         out3 = self.z3(z3) # out 128c x H x W
-        print("3 layer blue conv output", out3.shape)
+        logger.info(f"out3 shape: {out3.shape}")
 
         # 6 layer encoder out
         out6 = self.z6(z6) # out 256c x H x W
-        print("6 layer blue conv output", out6.shape)
+        logger.info(f"out6 shape: {out6.shape}")
 
         # 9 layer encoder out
         out9 = self.z9(z9) # out 512c x H x W
-        print("9 layer blue conv output", out9.shape)
+        logger.info(f"out9 shape: {out9.shape}")
 
         # 12 layer encoder out
         out12 = self.z12(z12) # out 512c x H x W
-        print("12 layer green conv output", out12.shape)
+        logger.info(f"out12 shape: {out12.shape}")
 
         #upsampling decoder + concats aka skip connections
 
         # 12 layer encoder out + 9 layer encoder out
-        print("concat1(9 + 12)", torch.cat([out12, out9], dim=1).shape)
-        c1 = self.c1(torch.cat([out12, out9], dim=1))
+        conc1 = torch.cat([out12, out9], dim=1)
+        logger.info(f"concat1(9 + 12) + 6 layer encoder output: {conc1.shape}")
+        c1 = self.c1(conc1)
+        logger.info(f"after c1 + upsample blocks shape: {c1.shape}")
 
         # concat1(9 + 12) + 6 layer encoder out
-        print("concat2(9 + 12) + 6 layer encoder output", torch.cat([c1, out6], dim=1).shape)
-        c2 = self.c2(torch.cat([c1, out6], dim=1))
+        conc2 = torch.cat([c1, out6], dim=1)
+        logger.info(f"concat2(6 + 9 + 12) + 3 layer encoder output: {conc2.shape}")
+        c2 = self.c2(conc2)
+        logger.info(f"after c2 + upsample blocks shape: {c2.shape}")
 
         # concat2(6 + 9 + 12) + 3 layer encoder out
-        print("concat3(6 + 9 + 12) + 3 layer encoder output", torch.cat([c2, out3], dim=1).shape)
-        c3 = self.c3(torch.cat([c2, out3], dim=1))
+        conc3 = torch.cat([c2, out3], dim=1)
+        logger.info(f"concat3(3 + 6 + 9 + 12) + 0 layer encoder output: {conc3.shape}")
+        c3 = self.c3(conc3)
+        logger.info(f"after c3 + upsample blocks shape: {c3.shape}")
 
         # concat3(3 + 6 + 9 + 12) + 0 layer encoder out
-        print("concat4(3 + 6 + 9 + 12) + 0 layer encoder output", torch.cat([c3, out0], dim=1).shape)
-        c4 = self.c4(torch.cat([c3, out0], dim=1))
+        conc4 = torch.cat([c3, out0], dim=1)
+        logger.info(f"concat4(0 + 3 + 6 + 9 + 12) + 0 layer encoder output: {conc4.shape}")
+        c4 = self.c4(conc4)
+        logger.info(f"after c4 + conv blocks shape: {c4.shape}")
 
-        print("Final output", c4.shape)
+        logger.info(f"final output shape: {c4.shape}")
 
         return c4
 
+if __name__ == "__main__":
+    logger = LoggerControl()
+    logger.enable_logging()
+    
+    x = torch.randn(1, 3, 512, 512)
+    unetr = UNETR2D(image_size=512, patch_size=16, num_classes=2)
+    y = unetr(x)

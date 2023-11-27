@@ -50,11 +50,14 @@ class TestBlueBlock(unittest.TestCase):
         y = bb(x)
         self.assertEqual(y.shape, (1, 64, 1024, 1024))
 
+class TestUNETR2D(unittest.TestCase):
+    def test_forward(self):
+        x = torch.randn(1, 3, 1024, 1024)
+        unetr = UNETR2D(image_size=1024, patch_size=16, num_classes=2)
+        y = unetr(x)
+        self.assertEqual(y.shape, (1, 2, 1024, 1024))
 
 if __name__ == '__main__':
     unittest.main(argv=[''], verbosity=2, exit=False)
-    x = torch.randn(1, 3, 256, 256)
-    unetr = UNETR(256, num_classes=5)
-    y = unetr(x)
-    print(y.shape)
+
 
